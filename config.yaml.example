@@ -1,0 +1,7 @@
+---
+domains:
+  - domain: *.coolwebsite.io
+    alt_names:
+      - coolwebsite.io
+  - domain: subdomain.coolwebsite.io
+email: admin@coolwebsite.io
