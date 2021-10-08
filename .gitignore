@@ -1,0 +1,4 @@
+account.key
+config.yaml
+certs/*
+!certs/.keep
