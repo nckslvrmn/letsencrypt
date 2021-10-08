@@ -63,9 +63,9 @@ def create_certificate(domain_name, order, names)
 end
 
 def write_certs(domain_name, ssl_private_key, order)
-  Dir.mkdir(domain_name) unless File.directory?(domain_name)
-  File.write("#{domain_name}/private.pem", ssl_private_key.to_s)
-  File.write("#{domain_name}/public.crt", order.certificate)
+  Dir.mkdir("certs/#{domain_name}") unless File.directory?("certs/#{domain_name}")
+  File.write("certs/#{domain_name}/private.pem", ssl_private_key.to_s)
+  File.write("certs/#{domain_name}/public.crt", order.certificate)
   puts "[#{domain_name}] - certificates written to disk"
 end
 
