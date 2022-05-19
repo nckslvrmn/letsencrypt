@@ -17,4 +17,7 @@ To tell the script which AWS account and region to use for route53 DNS challenge
 
 ## running
 
-to run, simply call `AWS_ENV_VARS ./certs.py`.
+to run:
+```
+AWS_ENV_VARS ./certs.py
+```
