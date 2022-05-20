@@ -1,7 +1,7 @@
 ---
 domains:
-  coolwebsite.io:
-    ssl_url: coolwebsite.io
-    wildcard: true
-    zone_id: R53_ZONE_ID
+  - domain: *.coolwebsite.io
+    alt_names:
+      - coolwebsite.io
+  - domain: subdomain.coolwebsite.io
 email: admin@coolwebsite.io
