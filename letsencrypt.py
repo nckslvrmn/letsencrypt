@@ -47,7 +47,6 @@ def main():
             domain_name=domain['domain'],
             domain_alt_names=domain.get('alt_names'),
             provider=Route53Dns(),
-            LOG_LEVEL='DEBUG',
             ACME_AUTH_STATUS_MAX_CHECKS=10
         )
         certificate = acme_client.get_certificate()
