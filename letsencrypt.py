@@ -4,7 +4,6 @@ import os
 
 from os.path import isfile, isdir
 
-import boto3
 import sewer.client
 
 from sewer.crypto import AcmeKey, AcmeAccount
@@ -38,6 +37,7 @@ def main():
     config = load(open('config.yaml', 'r'), Loader=FullLoader)
     new_account, acct_key = account_key()
     for domain in config['domains']:
+        print(domain)
         sanitized = domain['domain'].replace('*', 'star').replace('.', '_')
         acme_client = sewer.client.Client(
             account=AcmeAccount(pk=acct_key.pk, key_desc=acct_key.key_desc),
@@ -46,7 +46,9 @@ def main():
             is_new_acct=new_account,
             domain_name=domain['domain'],
             domain_alt_names=domain.get('alt_names'),
-            provider=Route53Dns(boto3.client('route53')),
+            provider=Route53Dns(),
+            LOG_LEVEL='DEBUG',
+            ACME_AUTH_STATUS_MAX_CHECKS=10
         )
         certificate = acme_client.get_certificate()
         print(f'certficate for {domain} acquired')
