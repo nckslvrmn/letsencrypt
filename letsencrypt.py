@@ -4,8 +4,7 @@ import os
 
 from os.path import isfile, isdir
 
-import sewer.client
-
+from sewer.client import Client
 from sewer.crypto import AcmeKey, AcmeAccount
 from sewer.dns_providers.route53 import Route53Dns
 from yaml import load, FullLoader
@@ -39,7 +38,7 @@ def main():
     for domain in config['domains']:
         print(domain)
         sanitized = domain['domain'].replace('*', 'star').replace('.', '_')
-        acme_client = sewer.client.Client(
+        acme_client = Client(
             account=AcmeAccount(pk=acct_key.pk, key_desc=acct_key.key_desc),
             cert_key=cert_priv_key(sanitized),
             contact_email=config['email'],
@@ -47,7 +46,6 @@ def main():
             domain_name=domain['domain'],
             domain_alt_names=domain.get('alt_names'),
             provider=Route53Dns(),
-            ACME_AUTH_STATUS_MAX_CHECKS=10
         )
         certificate = acme_client.get_certificate()
         print(f'certficate for {domain} acquired')
