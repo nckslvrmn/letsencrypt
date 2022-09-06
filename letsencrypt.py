@@ -12,7 +12,6 @@ from hashlib import sha256
 from os.path import isfile, isdir
 
 from cryptography import x509
-from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -34,39 +33,19 @@ def safe_base64(un_encoded_data):
     return r.decode("utf8")
 
 
-def jwk_request(url, payload, pk, jwk, ACME_GET_NONCE_URL):
-    headers = {}
+def signed_request(url, pk, payload="", jwk=None, kid=None):
     payload64 = safe_base64(payload)
-    response = requests.get(ACME_GET_NONCE_URL)
-    protected = {"alg": 'RS256', "nonce": response.headers["Replay-Nonce"], "url": url, "jwk": jwk}
+    response = requests.get('https://acme-v02.api.letsencrypt.org/acme/new-nonce')
+    protected = {"alg": 'RS256', "nonce": response.headers["Replay-Nonce"], "url": url}
+    if jwk is not None:
+        protected['jwk'] = jwk
+    if kid is not None:
+        protected['kid'] = kid
     protected64 = safe_base64(json.dumps(protected))
     message = f"{protected64}.{payload64}".encode("utf-8")
     signature64 = safe_base64(pk.sign(message, padding.PKCS1v15(), hashes.SHA256()))
-    data = json.dumps({
-        "protected": protected64,
-        "payload": payload64,
-        "signature": signature64
-    })
-    headers.update({"Content-Type": "application/jose+json"})
-    response = requests.post(url, data=data.encode("utf8"), headers=headers)
-    return response
-
-
-def kid_request(url, payload, pk, kid, ACME_GET_NONCE_URL):
-    headers = {}
-    payload64 = safe_base64(payload)
-    response = requests.get(ACME_GET_NONCE_URL)
-    protected = {"alg": 'RS256', "nonce": response.headers["Replay-Nonce"], "url": url, "kid": kid}
-    protected64 = safe_base64(json.dumps(protected))
-    message = f"{protected64}.{payload64}".encode("utf-8")
-    signature64 = safe_base64(pk.sign(message, padding.PKCS1v15(), hashes.SHA256()))
-    data = json.dumps({
-        "protected": protected64,
-        "payload": payload64,
-        "signature": signature64
-    })
-    headers.update({"Content-Type": "application/jose+json"})
-    response = requests.post(url, data=data.encode("utf8"), headers=headers)
+    data = json.dumps({'protected': protected64, 'payload': payload64, 'signature': signature64})
+    response = requests.post(url, data=data.encode("utf8"), headers={"Content-Type": "application/jose+json"})
     return response
 
 
@@ -89,28 +68,29 @@ def main():
     config = load(open('config.yaml', 'r'), Loader=FullLoader)
 
     if isfile('account.key'):
-        new_account = False
         with open('account.key', 'rb') as f:
-            account_key = load_pem_private_key(f.read(), None, default_backend())
+            account_key = load_pem_private_key(f.read(), None)
+        reg_payload = {"onlyReturnExisting": True}
     else:
-        account_key = rsa.generate_private_key(65537, 2048, default_backend())
+        account_key = rsa.generate_private_key(65537, 2048)
         account_key.write_pem('account.key')
-        new_account = True
+        reg_payload = {
+            "termsOfServiceAgreed": True,
+            "contact": [f"mailto:{config['email']}"],
+        }
 
     json_wk = jwk.JWK.from_pem(account_key.private_bytes(
         encoding=Encoding.PEM,
         format=PrivateFormat.PKCS8,
         encryption_algorithm=NoEncryption()
     ))
-    j = {
-        'kty': json_wk.get('kty'),
-        'e': json_wk.get('e'),
-        'n': json_wk.get('n')
-    }
+    j = {'kty': 'RSA', 'e': 'AQAB', 'n': json_wk.get('n')}
 
     for domain in config['domains']:
         sanitized = domain['domain'].replace('*', 'star').replace('.', '_')
-        cert_priv_key = rsa.generate_private_key(65537, 2048, default_backend())
+
+        # create and store new cert priv key
+        cert_priv_key = rsa.generate_private_key(65537, 2048)
         if not isdir(f'certs/{sanitized}/'):
             os.mkdir(f'certs/{sanitized}/')
         with open(f'certs/{sanitized}/private_key.pem', 'wb') as cpk:
@@ -120,20 +100,11 @@ def main():
                 encryption_algorithm=NoEncryption()
             ))
 
-        # get base urls
-        resp = requests.get('https://acme-v02.api.letsencrypt.org/directory')
-        if resp.status_code not in [200, 201]:
-            raise resp.text
-        acme_endpoints = resp.json()
-        ACME_GET_NONCE_URL = acme_endpoints["newNonce"]
-        ACME_NEW_ACCOUNT_URL = acme_endpoints["newAccount"]
-        ACME_NEW_ORDER_URL = acme_endpoints["newOrder"]
-
         # make CSR
         csrb = x509.CertificateSigningRequestBuilder().subject_name(
             x509.Name([
-                x509.NameAttribute(NameOID.COMMON_NAME, domain['domain']
-            )])
+                x509.NameAttribute(NameOID.COMMON_NAME, domain['domain'])
+            ])
         ).add_extension(
             x509.SubjectAlternativeName(
                 [x509.DNSName(name) for name in list(set([domain['domain']] + domain.get('alt_names')))]
@@ -143,20 +114,11 @@ def main():
         csr = csrb.sign(cert_priv_key, hashes.SHA256())
 
         # generate jwk and get kid
-        if new_account:
-            payload = {
-                "termsOfServiceAgreed": True,
-                "contact": [f"mailto:{config['email']}"],
-            }
-        else:
-            payload = {"onlyReturnExisting": True}
-
-        response = jwk_request(
-            ACME_NEW_ACCOUNT_URL,
-            json.dumps(payload),
+        response = signed_request(
+            'https://acme-v02.api.letsencrypt.org/acme/new-acct',
             account_key,
-            j,
-            ACME_GET_NONCE_URL
+            payload=json.dumps(reg_payload),
+            jwk=j
         )
         if response.status_code not in [201, 200]:
             raise response.text
@@ -167,12 +129,11 @@ def main():
         for domain_name in list(set([domain['domain']] + domain.get('alt_names'))):
             identifiers.append({"type": "dns", "value": domain_name})
         payload = {"identifiers": identifiers}
-        apply_for_cert_issuance_response = kid_request(
-            ACME_NEW_ORDER_URL,
-            json.dumps(payload),
+        apply_for_cert_issuance_response = signed_request(
+            'https://acme-v02.api.letsencrypt.org/acme/new-order',
             account_key,
-            kid,
-            ACME_GET_NONCE_URL
+            payload=json.dumps(payload),
+            kid=kid
         )
         if apply_for_cert_issuance_response.status_code != 201:
             raise RuntimeError(apply_for_cert_issuance_response.text)
@@ -183,19 +144,17 @@ def main():
         # get authorization information for challenges
         challenges = []
         for auth_url in authorizations:
-            response = kid_request(
+            response = signed_request(
                 auth_url,
-                "",
                 account_key,
-                kid,
-                ACME_GET_NONCE_URL
+                kid=kid
             )
             if response.status_code not in [200, 201]:
                 raise RuntimeError(response)
             response_json = response.json()
 
             for chal in response_json["challenges"]:
-                acme_header_jwk_json = json.dumps(j, sort_keys=True, separators=(",", ":"))
+                acme_header_jwk_json = json.dumps(j, sort_keys=True)
                 acme_thumbprint = safe_base64(sha256(acme_header_jwk_json.encode("utf8")).digest())
                 acme_keyauthorization = f"{chal['token']}.{acme_thumbprint}"
                 challenges.append({
@@ -239,13 +198,7 @@ def main():
             number_of_checks = 0
             while True:
                 time.sleep(8)
-                response = kid_request(
-                    chal["auth_url"],
-                    "",
-                    account_key,
-                    kid,
-                    ACME_GET_NONCE_URL
-                )
+                response = signed_request(chal["auth_url"], account_key, kid=kid)
                 authorization_status = response.json()["status"]
                 number_of_checks += 1
                 if authorization_status in ["pending", "valid"]:
@@ -256,22 +209,19 @@ def main():
             # submit finalization request for challenge
             if authorization_status == "pending":
                 payload = json.dumps({"keyAuthorization": chal["key_auth"]})
-                kid_request(
+                signed_request(
                     chal["chal_url"],
-                    json.dumps({"keyAuthorization": chal["key_auth"]}),
                     account_key,
-                    kid,
-                    ACME_GET_NONCE_URL
+                    payload=json.dumps({"keyAuthorization": chal["key_auth"]}),
+                    kid=kid,
                 )
             number_of_checks = 0
             while True:
                 time.sleep(8)
-                response = kid_request(
+                response = signed_request(
                     chal["auth_url"],
-                    "",
                     account_key,
-                    kid,
-                    ACME_GET_NONCE_URL
+                    kid=kid,
                 )
                 authorization_status = response.json()["status"]
                 number_of_checks += 1
@@ -286,12 +236,11 @@ def main():
 
         # send csr to finalize cert request
         payload = {"csr": safe_base64(csr.public_bytes(Encoding.DER))}
-        send_csr_response = kid_request(
+        send_csr_response = signed_request(
             finalize_url,
-            json.dumps(payload),
             account_key,
-            kid,
-            ACME_GET_NONCE_URL
+            payload=json.dumps(payload),
+            kid=kid,
         )
         if send_csr_response.status_code not in [200, 201]:
             raise RuntimeError(send_csr_response.text)
@@ -299,12 +248,10 @@ def main():
         certificate_url = send_csr_response_json["certificate"]
 
         # download signed certificate
-        response = kid_request(
+        response = signed_request(
             certificate_url,
-            "",
             account_key,
-            kid,
-            ACME_GET_NONCE_URL
+            kid=kid,
         )
         if response.status_code not in [200, 201]:
             raise ValueError(response.text)
