@@ -12,16 +12,15 @@ from hashlib import sha256
 from os.path import isfile, isdir
 
 from cryptography import x509
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.hashes import SHA256
+from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
+from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
 from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
     Encoding,
     NoEncryption,
     PrivateFormat
 )
-from cryptography.x509.oid import NameOID
 from jwcrypto.jwk import JWK
 from yaml import load, FullLoader
 
@@ -42,7 +41,7 @@ class PyACME:
                 self.account_key = load_pem_private_key(f.read(), None)
             self.reg_payload = {"onlyReturnExisting": True}
         else:
-            self.account_key = rsa.generate_private_key(65537, 2048)
+            self.account_key = generate_private_key(65537, 2048)
             self.account_key.write_pem('account.key')
             self.reg_payload = {
                 "termsOfServiceAgreed": True,
@@ -66,13 +65,13 @@ class PyACME:
             protected['jwk'] = self.acme_jwk
         protected64 = safe_base64(json.dumps(protected))
         message = f"{protected64}.{payload64}".encode("utf-8")
-        signature64 = safe_base64(self.account_key.sign(message, padding.PKCS1v15(), hashes.SHA256()))
+        signature64 = safe_base64(self.account_key.sign(message, PKCS1v15(), SHA256()))
         data = json.dumps({'protected': protected64, 'payload': payload64, 'signature': signature64})
         response = requests.post(url, data=data.encode("utf8"), headers={"Content-Type": "application/jose+json"})
         return response
 
     def gen_cert_priv_key(self, sanitized):
-        self.cert_priv_key = rsa.generate_private_key(65537, 2048)
+        self.cert_priv_key = generate_private_key(65537, 2048)
         if not isdir(f'certs/{sanitized}/'):
             os.mkdir(f'certs/{sanitized}/')
         with open(f'certs/{sanitized}/private_key.pem', 'wb') as cpk:
@@ -85,7 +84,7 @@ class PyACME:
     def gen_csr(self, domain):
         csrb = x509.CertificateSigningRequestBuilder().subject_name(
             x509.Name([
-                x509.NameAttribute(NameOID.COMMON_NAME, domain['domain'])
+                x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, domain['domain'])
             ])
         ).add_extension(
             x509.SubjectAlternativeName(
@@ -93,7 +92,7 @@ class PyACME:
             ),
             critical=False
         )
-        self.csr = csrb.sign(self.cert_priv_key, hashes.SHA256())
+        self.csr = csrb.sign(self.cert_priv_key, SHA256())
 
     def get_account_kid(self):
         response = self.__signed_request(
