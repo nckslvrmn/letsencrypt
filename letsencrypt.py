@@ -21,15 +21,12 @@ from cryptography.hazmat.primitives.serialization import (
     NoEncryption,
     PrivateFormat
 )
-from jwcrypto.jwk import JWK
+from cryptography.utils import int_to_bytes
 from yaml import load, FullLoader
 
 
-def safe_base64(un_encoded_data):
-    if isinstance(un_encoded_data, str):
-        un_encoded_data = un_encoded_data.encode("utf8")
-    r = base64.urlsafe_b64encode(un_encoded_data).rstrip(b"=")
-    return r.decode("utf8")
+def safe_base64(b):
+    return base64.urlsafe_b64encode(b).decode('utf8').replace("=", "")
 
 
 class PyACME:
@@ -42,28 +39,35 @@ class PyACME:
             self.reg_payload = {"onlyReturnExisting": True}
         else:
             self.account_key = generate_private_key(65537, 2048)
-            self.account_key.write_pem('account.key')
+            with open('account.key', 'wb') as f:
+                f.write(self.account_key.private_bytes(
+                    encoding=Encoding.PEM,
+                    format=PrivateFormat.PKCS8,
+                    encryption_algorithm=NoEncryption()
+                ))
             self.reg_payload = {
                 "termsOfServiceAgreed": True,
                 "contact": [f"mailto:{self.config['email']}"],
             }
 
-        self.json_wk = JWK.from_pem(self.account_key.private_bytes(
-            encoding=Encoding.PEM,
-            format=PrivateFormat.PKCS8,
-            encryption_algorithm=NoEncryption()
-        ))
-        self.acme_jwk = {'kty': 'RSA', 'e': 'AQAB', 'n': self.json_wk.get('n')}
+        pn = self.account_key.public_key().public_numbers()
+        self.acme_jwk = {
+            'kty': 'RSA',
+            'e': safe_base64(int_to_bytes(pn.e)),
+            'n': safe_base64(int_to_bytes(pn.n))
+        }
+        self.json_jwk = json.dumps(self.acme_jwk, sort_keys=True, separators=(',', ':'))
+        self.acme_thumbprint = safe_base64(sha256(self.json_jwk.encode("utf8")).digest())
 
     def __signed_request(self, url, payload=""):
-        payload64 = safe_base64(payload)
+        payload64 = safe_base64(payload.encode('utf-8'))
         response = requests.get('https://acme-v02.api.letsencrypt.org/acme/new-nonce')
         protected = {"alg": 'RS256', "nonce": response.headers["Replay-Nonce"], "url": url}
         if hasattr(self, 'kid'):
             protected['kid'] = self.kid
         elif hasattr(self, 'acme_jwk'):
             protected['jwk'] = self.acme_jwk
-        protected64 = safe_base64(json.dumps(protected))
+        protected64 = safe_base64(json.dumps(protected).encode('utf-8'))
         message = f"{protected64}.{payload64}".encode("utf-8")
         signature64 = safe_base64(self.account_key.sign(message, PKCS1v15(), SHA256()))
         data = json.dumps({'protected': protected64, 'payload': payload64, 'signature': signature64})
@@ -119,7 +123,7 @@ class PyACME:
         self.authorizations = apply_for_cert_issuance_response_json["authorizations"]
 
     def get_challenges(self):
-        self.challenges = []
+        self.challenges = {}
         for auth_url in self.authorizations:
             response = self.__signed_request(
                 auth_url
@@ -129,14 +133,18 @@ class PyACME:
             response_json = response.json()
 
             for chal in response_json["challenges"]:
-                acme_header_jwk_json = json.dumps(self.acme_jwk, sort_keys=True)
-                acme_thumbprint = safe_base64(sha256(acme_header_jwk_json.encode("utf8")).digest())
-                acme_keyauthorization = f"{chal['token']}.{acme_thumbprint}"
-                self.challenges.append({
+                acme_keyauthorization = f"{chal['token']}.{self.acme_thumbprint}"
+                if chal['type'] != 'dns-01':
+                    continue
+                safe_ident = response_json["identifier"]["value"].replace('.', '_')
+                dns_challenge = safe_base64(sha256(acme_keyauthorization.encode("utf8")).digest())
+                if self.challenges.get(safe_ident) is None:
+                    self.challenges[safe_ident] = []
+                self.challenges[safe_ident].append({
                     "ident_value": response_json["identifier"]["value"],
                     "token": chal["token"],
                     "key_auth": acme_keyauthorization,
-                    "dns_challenge": safe_base64(sha256(acme_keyauthorization.encode("utf8")).digest()),
+                    "dns_challenge": f'"{dns_challenge}"',
                     "wildcard": response_json.get("wildcard"),
                     "auth_url": auth_url,
                     "chal_url": chal["url"],
@@ -145,13 +153,13 @@ class PyACME:
     def check_challenge_result(self, auth_url, expected_status):
         number_of_checks = 0
         while True:
-            time.sleep(8)
+            time.sleep(5)
             response = self.__signed_request(auth_url)
             authorization_status = response.json()["status"]
             number_of_checks += 1
             if authorization_status in expected_status:
                 break
-            if number_of_checks == 3:
+            if number_of_checks == 6:
                 raise RuntimeError('failed after 3 attempts')
         return authorization_status
 
@@ -200,18 +208,18 @@ class ACMERoute53:
         zones.sort(key=lambda z: len(z[0]), reverse=True)
         return zones[0][1]
 
-    def set_dns_challenge_record(self, chal, action):
-        zone_id = self.__find_zone_id_for_domain(chal['ident_value'])
+    def set_dns_challenge_record(self, ident, action):
+        zone_id = self.__find_zone_id_for_domain(ident[0]['ident_value'])
         changeset = {
             "Comment": "certbot-dns-route53 certificate validation",
             "Changes": [
                 {
                     "Action": action,
                     "ResourceRecordSet": {
-                        "Name": f"_acme-challenge.{chal['ident_value']}",
+                        "Name": f"_acme-challenge.{ident[0]['ident_value']}",
                         "Type": "TXT",
                         "TTL": 10,
-                        "ResourceRecords": [{"Value": f"\"{chal['dns_challenge']}\""}],
+                        "ResourceRecords": [{"Value": chal['dns_challenge']} for chal in ident],
                     },
                 }
             ],
@@ -241,12 +249,13 @@ def main():
         pyacme.get_challenges()
 
         acmer53 = ACMERoute53()
-        for chal in pyacme.challenges:
-            acmer53.set_dns_challenge_record(chal, 'UPSERT')
-            authorization_status = pyacme.check_challenge_result(chal['auth_url'], ['pending', 'valid'])
-            pyacme.finalize_challenge(chal, authorization_status)
-            pyacme.check_challenge_result(chal['auth_url'], ['valid'])
-            acmer53.set_dns_challenge_record(chal, 'DELETE')
+        for ident in pyacme.challenges:
+            acmer53.set_dns_challenge_record(pyacme.challenges[ident], 'UPSERT')
+            for chal in pyacme.challenges[ident]:
+                authorization_status = pyacme.check_challenge_result(chal['auth_url'], ['pending', 'valid'])
+                pyacme.finalize_challenge(chal, authorization_status)
+                pyacme.check_challenge_result(chal['auth_url'], ['valid'])
+            acmer53.set_dns_challenge_record(pyacme.challenges[ident], 'DELETE')
 
         pyacme.finalize_cert()
         pyacme.download_cert(sanitized)
