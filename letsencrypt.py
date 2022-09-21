@@ -92,7 +92,7 @@ class PyACME:
             ])
         ).add_extension(
             x509.SubjectAlternativeName(
-                [x509.DNSName(name) for name in list(set([domain['domain']] + domain.get('alt_names')))]
+                [x509.DNSName(name) for name in list(set([domain['domain']] + domain.get('alt_names', [])))]
             ),
             critical=False
         )
@@ -109,7 +109,7 @@ class PyACME:
 
     def request_cert_issuance(self, domain):
         identifiers = []
-        for domain_name in list(set([domain['domain']] + domain.get('alt_names'))):
+        for domain_name in list(set([domain['domain']] + domain.get('alt_names', []))):
             identifiers.append({"type": "dns", "value": domain_name})
         payload = {"identifiers": identifiers}
         apply_for_cert_issuance_response = self.__signed_request(
