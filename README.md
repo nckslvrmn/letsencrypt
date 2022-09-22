@@ -1,6 +1,6 @@
 # letsencrypt
 
-this script interacts with the letsencrypt ACME APIs to request and download new certs. This script uses route53 to satisfy DNS challenges.
+This script interacts with the letsencrypt ACME APIs to request and download new certs. This script uses route53 to satisfy DNS challenges.
 
 ## dependencies
 
@@ -19,5 +19,5 @@ To tell the script which AWS account and region to use for route53 DNS challenge
 
 to run:
 ```
-AWS_ENV_VARS ./certs.py
+AWS_ENV_VARS ./letsencrypt.py
 ```
