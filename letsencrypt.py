@@ -15,12 +15,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
 from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
-from cryptography.hazmat.primitives.serialization import (
-    load_pem_private_key,
-    Encoding,
-    NoEncryption,
-    PrivateFormat
-)
+from cryptography.hazmat.primitives.serialization import load_pem_private_key, Encoding, NoEncryption, PrivateFormat
 from cryptography.utils import int_to_bytes
 from yaml import load, FullLoader
 
@@ -40,22 +35,14 @@ class PyACME:
         else:
             self.account_key = generate_private_key(65537, 2048)
             with open('account.key', 'wb') as f:
-                f.write(self.account_key.private_bytes(
-                    encoding=Encoding.PEM,
-                    format=PrivateFormat.PKCS8,
-                    encryption_algorithm=NoEncryption()
-                ))
+                f.write(self.account_key.private_bytes(encoding=Encoding.PEM, format=PrivateFormat.PKCS8, encryption_algorithm=NoEncryption()))
             self.reg_payload = {
                 "termsOfServiceAgreed": True,
                 "contact": [f"mailto:{self.config['email']}"],
             }
 
         pn = self.account_key.public_key().public_numbers()
-        self.acme_jwk = {
-            'kty': 'RSA',
-            'e': safe_base64(int_to_bytes(pn.e)),
-            'n': safe_base64(int_to_bytes(pn.n))
-        }
+        self.acme_jwk = {'kty': 'RSA', 'e': safe_base64(int_to_bytes(pn.e)), 'n': safe_base64(int_to_bytes(pn.n))}
         self.json_jwk = json.dumps(self.acme_jwk, sort_keys=True, separators=(',', ':'))
         self.acme_thumbprint = safe_base64(sha256(self.json_jwk.encode("utf8")).digest())
 
@@ -79,30 +66,20 @@ class PyACME:
         if not isdir(f'certs/{sanitized}/'):
             os.mkdir(f'certs/{sanitized}/')
         with open(f'certs/{sanitized}/private_key.pem', 'wb') as cpk:
-            cpk.write(self.cert_priv_key.private_bytes(
-                encoding=Encoding.PEM,
-                format=PrivateFormat.PKCS8,
-                encryption_algorithm=NoEncryption()
-            ))
+            cpk.write(self.cert_priv_key.private_bytes(encoding=Encoding.PEM, format=PrivateFormat.PKCS8, encryption_algorithm=NoEncryption()))
 
     def gen_csr(self, domain):
-        csrb = x509.CertificateSigningRequestBuilder().subject_name(
-            x509.Name([
-                x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, domain['domain'])
-            ])
-        ).add_extension(
-            x509.SubjectAlternativeName(
-                [x509.DNSName(name) for name in list(set([domain['domain']] + domain.get('alt_names', [])))]
-            ),
-            critical=False
+        csrb = (
+            x509.CertificateSigningRequestBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, domain['domain'])]))
+            .add_extension(
+                x509.SubjectAlternativeName([x509.DNSName(name) for name in list(set([domain['domain']] + domain.get('alt_names', [])))]), critical=False
+            )
         )
         self.csr = csrb.sign(self.cert_priv_key, SHA256())
 
     def get_account_kid(self):
-        response = self.__signed_request(
-            'https://acme-v02.api.letsencrypt.org/acme/new-acct',
-            payload=json.dumps(self.reg_payload)
-        )
+        response = self.__signed_request('https://acme-v02.api.letsencrypt.org/acme/new-acct', payload=json.dumps(self.reg_payload))
         if response.status_code not in [201, 200]:
             raise response.text
         self.kid = response.headers["Location"]
@@ -112,10 +89,7 @@ class PyACME:
         for domain_name in list(set([domain['domain']] + domain.get('alt_names', []))):
             identifiers.append({"type": "dns", "value": domain_name})
         payload = {"identifiers": identifiers}
-        apply_for_cert_issuance_response = self.__signed_request(
-            'https://acme-v02.api.letsencrypt.org/acme/new-order',
-            payload=json.dumps(payload)
-        )
+        apply_for_cert_issuance_response = self.__signed_request('https://acme-v02.api.letsencrypt.org/acme/new-order', payload=json.dumps(payload))
         if apply_for_cert_issuance_response.status_code != 201:
             raise RuntimeError(apply_for_cert_issuance_response.text)
         apply_for_cert_issuance_response_json = apply_for_cert_issuance_response.json()
@@ -125,9 +99,7 @@ class PyACME:
     def get_challenges(self):
         self.challenges = {}
         for auth_url in self.authorizations:
-            response = self.__signed_request(
-                auth_url
-            )
+            response = self.__signed_request(auth_url)
             if response.status_code not in [200, 201]:
                 raise RuntimeError(response)
             response_json = response.json()
@@ -140,15 +112,17 @@ class PyACME:
                 dns_challenge = safe_base64(sha256(acme_keyauthorization.encode("utf8")).digest())
                 if self.challenges.get(safe_ident) is None:
                     self.challenges[safe_ident] = []
-                self.challenges[safe_ident].append({
-                    "ident_value": response_json["identifier"]["value"],
-                    "token": chal["token"],
-                    "key_auth": acme_keyauthorization,
-                    "dns_challenge": f'"{dns_challenge}"',
-                    "wildcard": response_json.get("wildcard"),
-                    "auth_url": auth_url,
-                    "chal_url": chal["url"],
-                })
+                self.challenges[safe_ident].append(
+                    {
+                        "ident_value": response_json["identifier"]["value"],
+                        "token": chal["token"],
+                        "key_auth": acme_keyauthorization,
+                        "dns_challenge": f'"{dns_challenge}"',
+                        "wildcard": response_json.get("wildcard"),
+                        "auth_url": auth_url,
+                        "chal_url": chal["url"],
+                    }
+                )
 
     def check_challenge_result(self, auth_url, expected_status):
         number_of_checks = 0
@@ -165,10 +139,7 @@ class PyACME:
 
     def finalize_challenge(self, chal, authorization_status):
         if authorization_status == "pending":
-            self.__signed_request(
-                chal["chal_url"],
-                payload=json.dumps({"keyAuthorization": chal["key_auth"]})
-            )
+            self.__signed_request(chal["chal_url"], payload=json.dumps({"keyAuthorization": chal["key_auth"]}))
 
     def finalize_cert(self):
         payload = {"csr": safe_base64(self.csr.public_bytes(Encoding.DER))}
@@ -203,7 +174,7 @@ class ACMERoute53:
                 if zone["Config"]["PrivateZone"]:
                     continue
                 candidate_labels = zone["Name"].rstrip(".").split(".")
-                if candidate_labels == target_labels[-len(candidate_labels):]:
+                if candidate_labels == target_labels[-len(candidate_labels) :]:
                     zones.append((zone["Name"], zone["Id"]))
         zones.sort(key=lambda z: len(z[0]), reverse=True)
         return zones[0][1]
@@ -243,22 +214,33 @@ def main():
     for domain in pyacme.config['domains']:
         sanitized = domain['domain'].replace('*', 'star').replace('.', '_')
         pyacme.gen_cert_priv_key(sanitized)
+        print('RSA private key generated')
         pyacme.gen_csr(domain)
+        print('certificat signing request generated')
         pyacme.get_account_kid()
+        print('account id retrieved from ACME')
         pyacme.request_cert_issuance(domain)
+        print('certificate signing request initiated with ACME')
         pyacme.get_challenges()
+        print('DNS challenges received from ACME')
 
         acmer53 = ACMERoute53()
         for ident in pyacme.challenges:
+            print('setting DNS challenge records in Route 53')
             acmer53.set_dns_challenge_record(pyacme.challenges[ident], 'UPSERT')
             for chal in pyacme.challenges[ident]:
+                print(f'checking DNS challenge result for {chal["auth_url"]}')
                 authorization_status = pyacme.check_challenge_result(chal['auth_url'], ['pending', 'valid'])
                 pyacme.finalize_challenge(chal, authorization_status)
                 pyacme.check_challenge_result(chal['auth_url'], ['valid'])
+                print(f'DNS challenge completed for {chal["auth_url"]}')
+            print('deleting DNS challenge records in Route 53')
             acmer53.set_dns_challenge_record(pyacme.challenges[ident], 'DELETE')
 
         pyacme.finalize_cert()
+        print('finalized certificate signing request')
         pyacme.download_cert(sanitized)
+        print('finalized certificate downloaded')
 
 
 if __name__ == "__main__":
